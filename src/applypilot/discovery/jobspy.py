@@ -121,6 +121,7 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
     now = datetime.now(timezone.utc).isoformat()
     new = 0
     existing = 0
+    excluded = config.exclude_title_patterns()
 
     for _, row in df.iterrows():
         url = str(row.get("job_url", ""))
@@ -128,6 +129,8 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
             continue
 
         title = str(row.get("title", "")) if str(row.get("title", "")) != "nan" else None
+        if config.title_excluded(title, excluded):
+            continue
         company = str(row.get("company", "")) if str(row.get("company", "")) != "nan" else None
         location_str = str(row.get("location", "")) if str(row.get("location", "")) != "nan" else None
 
@@ -222,6 +225,8 @@ def _run_one_search(
         }
         if s.get("remote"):
             kwargs["is_remote"] = True
+        if defaults.get("distance"):
+            kwargs["distance"] = int(defaults["distance"])  # search radius in miles (wizard asks for it)
         if proxy_config:
             kwargs["proxies"] = [proxy_config["jobspy"]]
         if "linkedin" in other_sites:
@@ -373,7 +378,7 @@ def _full_crawl(
     # Build search combinations from config
     queries = search_cfg.get("queries", [])
     locs = search_cfg.get("locations", [])
-    defaults = search_cfg.get("defaults", {})
+    defaults = {**(search_cfg.get("defaults") or {}), "country_indeed": config.indeed_country(search_cfg)}
     glassdoor_map = search_cfg.get("glassdoor_location_map", {})
     accept_locs, reject_locs = _load_location_config(search_cfg)
 
@@ -460,7 +465,7 @@ def run_discovery(cfg: dict | None = None) -> dict:
         return {"new": 0, "existing": 0, "errors": 0, "db_total": 0, "queries": 0}
 
     proxy = cfg.get("proxy")
-    sites = cfg.get("sites")
+    sites = config.job_boards(cfg)
     results_per_site = cfg.get("defaults", {}).get("results_per_site", 100)
     hours_old = cfg.get("defaults", {}).get("hours_old", 72)
     tiers = cfg.get("tiers")

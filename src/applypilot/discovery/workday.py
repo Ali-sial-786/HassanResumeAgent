@@ -194,6 +194,7 @@ def search_employer(
     reject_locs: list[str] | None = None,
 ) -> list[dict]:
     """Search an employer, paginate through all results, optionally filter by location."""
+    excluded_titles = config.exclude_title_patterns()
     log.info("%s: searching \"%s\"...", employer["name"], search_text)
 
     all_jobs: list[dict] = []
@@ -219,6 +220,8 @@ def search_employer(
 
         for j in postings:
             loc = j.get("locationsText", "")
+            if config.title_excluded(j.get("title"), excluded_titles):
+                continue
             if location_filter and accept_locs is not None and reject_locs is not None:
                 if not _location_ok(loc, accept_locs, reject_locs):
                     continue

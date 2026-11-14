@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `searches.yaml` location accept/reject patterns were ignored (upstream #109).
 - `applypilot apply --url` could not select never-attempted jobs.
 - Auto-apply crashed when no Chrome user profile existed.
+- `boards`, `country`, `exclude_titles` (searches.yaml) and the wizard's search radius
+  were ignored; the wizard now writes a location accept list and asks for the country.
 
 ### Changed
 - Playwright MCP pinned to 0.0.85; `browser_run_code_unsafe` hidden from the model.

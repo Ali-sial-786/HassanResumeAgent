@@ -120,13 +120,42 @@ def location_filter_lists(search_cfg: dict | None) -> tuple[list[str], list[str]
     keys and also the legacy flat ``location_accept`` / ``location_reject_non_remote``
     keys. Upstream read only the legacy keys, so every non-remote job was dropped
     (ApplyPilot issue #109).
+
+    If no accept patterns are configured, the non-remote ``locations`` you search
+    in are accepted (e.g. searching "New York, NY" accepts "New York" jobs), so
+    hybrid/onsite jobs in the places you asked for are not thrown away.
     """
     cfg = search_cfg or {}
     loc = cfg.get("location") if isinstance(cfg.get("location"), dict) else {}
     accept = list(loc.get("accept_patterns") or []) + list(cfg.get("location_accept") or [])
     reject = list(loc.get("reject_patterns") or []) + list(cfg.get("location_reject_non_remote") or [])
+    if not accept:
+        for entry in cfg.get("locations") or []:
+            name = (entry.get("location") if isinstance(entry, dict) else str(entry or "")).strip()
+            if name and name.lower() not in ("remote", "anywhere"):
+                accept.append(name.split(",")[0].strip())
     return accept, reject
 
+
+def exclude_title_patterns(search_cfg: dict | None = None) -> list[str]:
+    """Title keywords to skip (``exclude_titles`` in searches.yaml; upstream never applied it)."""
+    cfg = search_cfg if search_cfg is not None else load_search_config()
+    return [str(t).lower() for t in (cfg or {}).get("exclude_titles") or [] if str(t).strip()]
+
+
+def title_excluded(title: str | None, patterns: list[str]) -> bool:
+    t = (title or "").lower()
+    return any(p in t for p in patterns)
+
+
+def job_boards(search_cfg: dict) -> list[str] | None:
+    """Boards to search: ``boards`` (documented) or ``sites`` (what upstream code read)."""
+    return search_cfg.get("boards") or search_cfg.get("sites")
+
+
+def indeed_country(search_cfg: dict) -> str:
+    """Country for Indeed/Glassdoor: ``country`` (documented) or ``defaults.country_indeed``."""
+    return str((search_cfg.get("defaults") or {}).get("country_indeed") or search_cfg.get("country") or "usa").lower()
 
 def load_sites_config() -> dict:
     """Load sites.yaml configuration (sites list, manual_ats, blocked, etc.)."""

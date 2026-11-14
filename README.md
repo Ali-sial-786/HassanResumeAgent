@@ -61,13 +61,39 @@ ANTHROPIC_EFFORT=medium           # effort for Claude
 
 ## Choosing which jobs to apply to
 
-Everything lives in `~/.applypilot/` (created by `applypilot init`):
+Jobs pass through four filters, each driven by your files in `~/.applypilot/` (created by `applypilot init`, editable any time):
 
-- **`searches.yaml`**: your criteria. Job titles to search (`queries`), `locations` (including remote), location accept/reject patterns, which boards to use (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs), how fresh postings must be (`hours_old`), and title keywords to skip (`exclude_titles`). See [`searches.example.yaml`](src/applypilot/config/searches.example.yaml).
-- **`profile.json`**: contact details, work authorization, salary expectations, your real skills (the AI may not claim anything outside this list), and EEO answers.
-- **Score threshold**: only jobs the AI rates at or above `--min-score` (default 7/10) get tailored resumes, cover letters and applications.
+1. **Search** (`searches.yaml`): which postings get pulled in.
+   - `queries`: job titles to search for. `tier: 1` is searched first.
+   - `locations`: where to search; add `{location: "Remote", remote: true}` to also search remote roles.
+   - `defaults.distance`: radius in miles. `defaults.hours_old`: only postings this fresh.
+   - `boards`: `indeed`, `linkedin`, `glassdoor`, `zip_recruiter`, `google`. `country`: for Indeed/Glassdoor.
+   - It also checks 48 Workday employer portals and about 30 company career sites that ship with the tool.
+2. **Hard filters** (`searches.yaml`): applied before any AI runs.
+   - `exclude_titles`: skip titles containing these words (e.g. "intern", "director").
+   - `location.accept_patterns` / `reject_patterns`: remote jobs are always kept; hybrid and onsite jobs are kept only if their location matches an accept pattern. If you list none, the cities you search in are used.
+3. **AI fit score**: the AI reads each full posting against your resume and scores it 1-10. Only jobs at or above `--min-score` (default 7) get a tailored resume, cover letter and application. Run `applypilot status` or `applypilot dashboard` to see the scores and the AI's reasons.
+4. **Checks on the application page** (from `profile.json`): before filling anything, the agent re-checks the work arrangement against your accepted locations. It answers salary questions from your `compensation` range (never below your floor) and work-authorization questions from your profile, and it stops on onsite-only roles elsewhere, freelance marketplaces, and SSO-only logins.
 
----
+Example `searches.yaml`:
+
+```yaml
+queries:
+  - {query: "Data Engineer", tier: 1}
+  - {query: "Analytics Engineer", tier: 2}
+locations:
+  - {location: "Toronto, ON", remote: false}
+  - {location: "Remote", remote: true}
+defaults: {hours_old: 72, results_per_site: 50, distance: 25}
+location:
+  accept_patterns: ["Toronto", "Mississauga", "Ontario", "Canada"]
+  reject_patterns: ["onsite only"]
+boards: [indeed, linkedin, zip_recruiter]
+country: canada
+exclude_titles: [intern, director, "vice president", principal]
+```
+
+The full annotated example is [`searches.example.yaml`](src/applypilot/config/searches.example.yaml).
 
 ## Cover letters with real stories
 
@@ -121,6 +147,8 @@ Compared with ApplyPilot 0.3.0 (`Pickle-Pixel/ApplyPilot@4a8d521`):
 - Location accept/reject patterns in `searches.yaml` were ignored, so non-remote jobs were silently dropped (upstream issue #109).
 - `applypilot apply --url` never matched a job that had not been attempted before (SQL `NULL != 'in_progress'`).
 - Auto-apply crashed on machines without an existing Chrome profile.
+- `boards`, `country` and `exclude_titles` in `searches.yaml` were documented but never read, and the wizard's search radius was never used.
+- The wizard wrote no location accept list, so onsite jobs in the city you entered were dropped.
 
 **Hardening**
 - Playwright MCP pinned to a tested version (upstream used `@latest`). Its arbitrary-code tool is hidden from the model.

@@ -96,10 +96,14 @@ def _store_jobs_filtered(
     new = 0
     existing = 0
     filtered = 0
+    excluded = config.exclude_title_patterns()
 
     for job in jobs:
         url = job.get("url")
         if not url:
+            continue
+        if config.title_excluded(job.get("title"), excluded):
+            filtered += 1
             continue
         if not _location_ok(job.get("location"), accept_locs, reject_locs):
             filtered += 1

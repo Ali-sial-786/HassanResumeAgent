@@ -195,6 +195,8 @@ def _setup_searches() -> None:
     except ValueError:
         distance = 0
 
+    country = Prompt.ask("Country for job board searches (e.g. usa, canada, uk)", default="usa").strip().lower()
+
     roles_raw = Prompt.ask(
         "Target job titles (comma-separated, e.g. 'Backend Engineer, Full Stack Developer')"
     )
@@ -224,6 +226,29 @@ def _setup_searches() -> None:
     for i, role in enumerate(roles):
         lines.append(f'  - query: "{role}"')
         lines.append(f"    tier: {min(i + 1, 3)}")
+
+    city = location.split(",")[0].strip()
+    lines += [
+        "",
+        "# Hybrid/onsite jobs are kept only if their location contains one of these.",
+        "# Remote jobs are always kept. Add nearby cities, your state/province, etc.",
+        "location:",
+        "  accept_patterns:",
+    ]
+    if city and city.lower() not in ("remote", "anywhere"):
+        lines.append(f'    - "{city}"')
+    else:
+        lines.append('    - "Remote"')
+    lines += [
+        "  reject_patterns: []",
+        "",
+        "# Job boards: indeed, linkedin, glassdoor, zip_recruiter, google",
+        "boards: [indeed, linkedin, zip_recruiter]",
+        f'country: "{country}"   # country for Indeed/Glassdoor searches',
+        "",
+        "# Skip jobs whose title contains any of these (case-insensitive)",
+        'exclude_titles: ["intern", "internship", "director", "vice president"]',
+    ]
 
     SEARCH_CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     console.print(f"[green]Search config saved to {SEARCH_CONFIG_PATH}[/green]")

@@ -83,3 +83,33 @@ def test_build_bank_and_letter_uses_story(monkeypatch, tmp_path):
     assert out == letter
     user_msg = prompts[-1][1]["content"]
     assert "STORY 1: Rebuilt nightly ETL" in user_msg and "They need faster pipelines." in user_msg
+
+
+def test_location_defaults_to_searched_cities():
+    """Wizard-style config without accept_patterns must keep onsite jobs in the searched city."""
+    cfg = {"locations": [{"location": "New York, NY", "remote": False}, {"location": "Remote", "remote": True}]}
+    accept, _ = config.location_filter_lists(cfg)
+    assert accept == ["New York"]
+    assert jobspy_mod._location_ok("New York, NY (Hybrid)", accept, [])
+    assert not jobspy_mod._location_ok("Chicago, IL", accept, [])
+
+
+def test_documented_criteria_keys_are_honoured(monkeypatch):
+    import pandas as pd
+    from applypilot.database import init_db
+
+    cfg = {"boards": ["indeed", "linkedin"], "country": "Canada", "exclude_titles": ["Intern", "Director"]}
+    assert config.job_boards(cfg) == ["indeed", "linkedin"]
+    assert config.job_boards({"sites": ["google"]}) == ["google"]
+    assert config.indeed_country(cfg) == "canada"
+    monkeypatch.setattr(config, "load_search_config", lambda: cfg)
+    df = pd.DataFrame([
+        {"job_url": "https://x.test/1", "title": "Data Engineer", "location": "Toronto"},
+        {"job_url": "https://x.test/2", "title": "Data Engineering Intern", "location": "Toronto"},
+        {"job_url": "https://x.test/3", "title": "Director of Data", "location": "Toronto"},
+    ])
+    conn = init_db()
+    new, _ = jobspy_mod.store_jobspy_results(conn, df, "q")
+    assert new == 1
+    titles = [r[0] for r in conn.execute("SELECT title FROM jobs WHERE url LIKE 'https://x.test/%'")]
+    assert titles == ["Data Engineer"]
