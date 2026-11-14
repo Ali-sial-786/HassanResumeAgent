@@ -19,6 +19,7 @@ pip install -e .
 
 applypilot init        # resume, profile, job criteria, AI provider (choose "codex")
 applypilot login       # sign in with ChatGPT (opens a browser)
+applypilot linkedin-login   # sign in to LinkedIn once in the agent's browser (to apply to LinkedIn jobs)
 applypilot doctor      # check that everything is ready
 
 applypilot run         # discover > enrich > score > tailor > cover letters
@@ -95,6 +96,22 @@ exclude_titles: [intern, director, "vice president", principal]
 
 The full annotated example is [`searches.example.yaml`](src/applypilot/config/searches.example.yaml).
 
+## LinkedIn
+
+LinkedIn is supported for both finding and applying:
+
+- **Finding jobs needs no account.** With `linkedin` in `boards`, LinkedIn's public job search is used, and each job's full description is fetched. Set `linkedin: {easy_apply_only: true}` in `searches.yaml` to only collect Easy Apply jobs.
+- **Applying needs you signed in once.** Logged out, LinkedIn hides the employer's application link and Easy Apply is unavailable. Run `applypilot linkedin-login`: a Chrome window opens on LinkedIn's sign-in page, you sign in yourself (2-step verification included), and the session is kept in the agent's own browser profile. ApplyPilot never sees or stores your LinkedIn password.
+- **Both kinds of LinkedIn job work.** *Easy Apply*: the agent fills LinkedIn's multi-step form, uploads the tailored resume, answers questions and submits. *Apply on company website*: it follows the link to the employer's site and applies there.
+- **Safety rails.**
+  - The agent never types credentials into LinkedIn and never creates accounts.
+  - If it finds itself logged out or facing a LinkedIn security check, it stops. The job stays in the queue, and LinkedIn jobs are paused for the rest of that run.
+  - LinkedIn applications are capped at 25 per 24 hours (`LINKEDIN_DAILY_LIMIT`).
+  - It won't message recruiters, follow companies or edit your profile.
+- Until you sign in, LinkedIn jobs are still found, scored and get cover letters, but `apply` skips them. `applypilot doctor` shows whether the LinkedIn session is active.
+
+> LinkedIn's user agreement prohibits automated activity, and LinkedIn does restrict accounts it thinks are bots. Keep the daily cap modest, prefer `--dry-run` at first, and consider applying to LinkedIn jobs at a human pace.
+
 ## Cover letters with real stories
 
 Generic cover letters list skills. Good ones tell one short, specific story. That's also where AI is most tempted to make things up, so this fork adds a **story bank**:
@@ -141,7 +158,8 @@ Compared with ApplyPilot 0.3.0 (`Pickle-Pixel/ApplyPilot@4a8d521`):
 - `anthropic` provider using the official SDK (`providers/anthropic_provider.py`), with automatic fallback from ChatGPT to Claude when ChatGPT usage limits are hit.
 - A native browser agent (`apply/agent.py`) that replaces the `claude -p` subprocess. Any provider can drive Playwright MCP, so Claude Code is no longer required.
 - Story bank (`scoring/stories.py`) and invented-number rejection for cover letters.
-- New commands: `applypilot login | logout | models | stories`.
+- LinkedIn applying (`linkedin.py`): one-time manual sign-in (`applypilot linkedin-login`), an Easy Apply / company-site playbook for the agent, pause on login walls and security checks, and a daily cap. Optional Easy-Apply-only discovery.
+- New commands: `applypilot login | logout | models | stories | linkedin-login`.
 
 **Upstream bugs fixed**
 - Location accept/reject patterns in `searches.yaml` were ignored, so non-remote jobs were silently dropped (upstream issue #109).

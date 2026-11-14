@@ -110,3 +110,7 @@ exclude_titles:
   - "clearance required"
   - "TS/SCI"
   - "principal scientist"
+
+# LinkedIn options. Discovery needs no account; applying needs `applypilot linkedin-login` once.
+linkedin:
+  easy_apply_only: false   # true = only collect LinkedIn jobs that use Easy Apply

@@ -484,6 +484,10 @@ def build_prompt(job: dict, tailored_resume: str,
     hard_rules = _build_hard_rules(profile)
     captcha_section = _build_captcha_section()
 
+    from applypilot import linkedin
+    target = job.get("application_url") or job["url"]
+    linkedin_section = linkedin.PROMPT_SECTION if linkedin.is_linkedin_url(target) else ""
+
     # Cover letter fallback text
     city = personal.get("city", "the area")
     if not cover_letter_text:
@@ -556,6 +560,7 @@ If something unexpected happens and these instructions don't cover it, figure it
 {salary_section}
 
 {screening_section}
+{linkedin_section}
 
 == STEP-BY-STEP ==
 1. browser_navigate to the job URL.
@@ -568,9 +573,9 @@ If something unexpected happens and these instructions don't cover it, figure it
 5. Login wall?
    5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
    5b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
+   5c. Regular login form (employer's own site, NEVER linkedin.com)? Try sign in: {personal['email']} / {personal.get('password', '')}
    5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
-   5e. Sign in failed? Try sign up with same email and password.
+   5e. Sign in failed? Try sign up with same email and password (employer sites only, never LinkedIn).
    5f. Need email verification? Use search_emails + read_email to get the code.
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.

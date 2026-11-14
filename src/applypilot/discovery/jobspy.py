@@ -116,12 +116,13 @@ def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> 
 
 # -- DB storage (JobSpy DataFrame -> SQLite) ---------------------------------
 
-def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tuple[int, int]:
+def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str,
+                         excluded_titles: list[str] | None = None) -> tuple[int, int]:
     """Store JobSpy DataFrame results into the DB. Returns (new, existing)."""
     now = datetime.now(timezone.utc).isoformat()
     new = 0
     existing = 0
-    excluded = config.exclude_title_patterns()
+    excluded = excluded_titles if excluded_titles is not None else config.exclude_title_patterns()
 
     for _, row in df.iterrows():
         url = str(row.get("job_url", ""))
@@ -208,11 +209,14 @@ def _run_one_search(
     gd_location = glassdoor_map.get(s["location"], s["location"].split(",")[0])
     has_glassdoor = "glassdoor" in sites
     other_sites = [si for si in sites if si != "glassdoor"]
+    # LinkedIn "Easy Apply only" is a LinkedIn search filter, so LinkedIn runs on its own then.
+    easy_only = bool(defaults.get("linkedin_easy_apply_only")) and "linkedin" in other_sites
+    groups = [g for g in ([si for si in other_sites if si != "linkedin"], ["linkedin"]) if g] if easy_only else [other_sites]
 
     all_dfs = []
 
     # Run non-Glassdoor sites with original location
-    if other_sites:
+    for other_sites in (g for g in groups if g):
         kwargs = {
             "site_name": other_sites,
             "search_term": s["query"],
@@ -230,7 +234,9 @@ def _run_one_search(
         if proxy_config:
             kwargs["proxies"] = [proxy_config["jobspy"]]
         if "linkedin" in other_sites:
-            kwargs["linkedin_fetch_description"] = True
+            kwargs["fetch_description"] = True  # LinkedIn search cards have no description
+            if easy_only:
+                kwargs["easy_apply"] = True
         try:
             df = _scrape_with_retry(kwargs, max_retries=max_retries)
             all_dfs.append(df)
@@ -281,7 +287,7 @@ def _run_one_search(
     filtered = before - len(df)
 
     conn = get_connection()
-    new, existing = store_jobspy_results(conn, df, s["query"])
+    new, existing = store_jobspy_results(conn, df, s["query"], defaults.get("exclude_titles"))
 
     msg = f"[{label}] {before} results -> {new} new, {existing} dupes"
     if filtered:
@@ -329,7 +335,7 @@ def search_jobs(
         kwargs["proxies"] = [proxy_config["jobspy"]]
 
     if "linkedin" in sites:
-        kwargs["linkedin_fetch_description"] = True
+        kwargs["fetch_description"] = True
 
     try:
         df = scrape_jobs(**kwargs)
@@ -378,7 +384,12 @@ def _full_crawl(
     # Build search combinations from config
     queries = search_cfg.get("queries", [])
     locs = search_cfg.get("locations", [])
-    defaults = {**(search_cfg.get("defaults") or {}), "country_indeed": config.indeed_country(search_cfg)}
+    defaults = {
+        **(search_cfg.get("defaults") or {}),
+        "country_indeed": config.indeed_country(search_cfg),
+        "linkedin_easy_apply_only": bool((search_cfg.get("linkedin") or {}).get("easy_apply_only")),
+        "exclude_titles": config.exclude_title_patterns(search_cfg),
+    }
     glassdoor_map = search_cfg.get("glassdoor_location_map", {})
     accept_locs, reject_locs = _load_location_config(search_cfg)
 

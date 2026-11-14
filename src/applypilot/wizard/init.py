@@ -248,6 +248,10 @@ def _setup_searches() -> None:
         "",
         "# Skip jobs whose title contains any of these (case-insensitive)",
         'exclude_titles: ["intern", "internship", "director", "vice president"]',
+        "",
+        "# LinkedIn: set easy_apply_only to true to only collect LinkedIn jobs with Easy Apply",
+        "linkedin:",
+        "  easy_apply_only: false",
     ]
 
     SEARCH_CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -348,6 +352,20 @@ def _setup_auto_apply() -> None:
             "Install it from: [bold]https://nodejs.org[/bold]\n"
             "Auto-apply won't work until Node.js is installed."
         )
+
+    # LinkedIn: applying needs a signed-in session in the agent's browser profile
+    console.print("\n[dim]LinkedIn jobs need you to sign in once in the agent's own browser (your password is never stored).[/dim]")
+    if Confirm.ask("Sign in to LinkedIn now?", default=False):
+        from applypilot import linkedin
+        try:
+            if linkedin.login_interactive(0, echo=console.print):
+                console.print("[green]LinkedIn session saved.[/green]")
+            else:
+                console.print("[yellow]No LinkedIn session saved. Run [bold]applypilot linkedin-login[/bold] later.[/yellow]")
+        except Exception as exc:
+            console.print(f"[yellow]{exc}[/yellow] Run [bold]applypilot linkedin-login[/bold] later.")
+    else:
+        console.print("[dim]Skipped. Run [bold]applypilot linkedin-login[/bold] any time. Until then LinkedIn jobs are found and scored but not applied to.[/dim]")
 
     # Optional: CapSolver for CAPTCHAs
     console.print("\n[dim]Some job sites use CAPTCHAs. CapSolver can handle them automatically.[/dim]")

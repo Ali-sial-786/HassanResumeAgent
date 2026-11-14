@@ -111,6 +111,35 @@ def logout() -> None:
                       "unless you set CODEX_USE_CLI_AUTH=0.[/dim]")
 
 
+@app.command("linkedin-login")
+def linkedin_login() -> None:
+    """Sign in to LinkedIn once in the agent's browser so it can apply to LinkedIn jobs."""
+    _bootstrap()
+    from applypilot import linkedin
+
+    if linkedin.has_session(0):
+        console.print("[green]Already signed in to LinkedIn[/green] in the agent's browser profile.")
+        if not typer.confirm("Sign in again?", default=False):
+            return
+    console.print(
+        "[bold]LinkedIn sign-in[/bold]\n"
+        "Sign in with your own LinkedIn account in the window that opens. ApplyPilot never sees your password;\n"
+        "it only keeps the browser session, in ~/.applypilot/chrome-workers/.\n"
+        "[yellow]LinkedIn restricts accounts that look automated. ApplyPilot caps LinkedIn applications at "
+        f"{linkedin.daily_limit()} per 24h (LINKEDIN_DAILY_LIMIT).[/yellow]\n"
+    )
+    try:
+        ok = linkedin.login_interactive(0, echo=console.print)
+    except Exception as exc:
+        console.print(f"[red]LinkedIn sign-in failed: {exc}[/red]")
+        raise typer.Exit(code=1)
+    if ok:
+        console.print("[green]Signed in.[/green] LinkedIn jobs will now be included in `applypilot apply`.")
+    else:
+        console.print("[red]No LinkedIn session was saved.[/red] Make sure you finished signing in, then try again.")
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def stories(
     rebuild: bool = typer.Option(False, "--rebuild", help="Regenerate the story bank from your resume (overwrites edits)."),
@@ -273,6 +302,12 @@ def apply(
 
     if model:
         os.environ["APPLY_LLM_MODEL"] = model
+
+    from applypilot import linkedin as _linkedin
+    if url and _linkedin.is_linkedin_url(url) and not _linkedin.has_session(0):
+        console.print("[red]This is a LinkedIn job and the agent's browser is not signed in to LinkedIn.[/red]\n"
+                      "Run [bold]applypilot linkedin-login[/bold] first.")
+        raise typer.Exit(code=1)
 
     # Check 1: Tier 3 required (LLM provider + Chrome + npx)
     check_tier(3, "auto-apply")
@@ -486,6 +521,11 @@ def doctor() -> None:
         results.append(("Active LLM", fail_mark, str(exc)))
 
     # --- Tier 3 checks ---
+    from applypilot import linkedin as _linkedin
+    if _linkedin.has_session(0):
+        results.append(("LinkedIn session", ok_mark, f"signed in (applications capped at {_linkedin.daily_limit()}/24h)"))
+    else:
+        results.append(("LinkedIn session", warn_mark, "Run 'applypilot linkedin-login' to apply to LinkedIn jobs"))
     # Chrome
     try:
         chrome_path = get_chrome_path()

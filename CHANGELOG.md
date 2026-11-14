@@ -17,10 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Story bank (`applypilot stories`, `~/.applypilot/stories.yaml`): resume-grounded STAR
   stories narrated in cover letters; letters with invented numbers are rejected.
 - `applypilot logout` and `applypilot models` commands.
+- LinkedIn applying: `applypilot linkedin-login` (one-time manual sign-in in the agent's
+  browser profile), Easy Apply and company-site playbook in the agent prompt, LinkedIn
+  jobs paused on login walls/security checks, `LINKEDIN_DAILY_LIMIT` (default 25),
+  `linkedin.easy_apply_only` discovery option.
 
 ### Fixed
 - `searches.yaml` location accept/reject patterns were ignored (upstream #109).
 - `applypilot apply --url` could not select never-attempted jobs.
+- On LinkedIn sign-in walls the agent would try the profile's email/password or sign up.
 - Auto-apply crashed when no Chrome user profile existed.
 - `boards`, `country`, `exclude_titles` (searches.yaml) and the wizard's search radius
   were ignored; the wizard now writes a location accept list and asks for the country.

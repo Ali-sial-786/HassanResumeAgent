@@ -47,6 +47,11 @@ POLL_INTERVAL = config.DEFAULTS["poll_interval"]
 # Thread-safe shutdown coordination
 _stop_event = threading.Event()
 
+# Set when LinkedIn turns out to be unusable this run (logged out, security check,
+# daily cap); LinkedIn jobs are then left in the queue for a later run.
+_linkedin_paused: str | None = None
+_linkedin_lock = threading.Lock()
+
 # Per-worker skip flags for Ctrl+C handling (checked before every browser action)
 _skip_events: dict[int, threading.Event] = {}
 _skip_lock = threading.Lock()
@@ -70,6 +75,26 @@ def _make_mcp_config(cdp_port: int) -> dict:
 # ---------------------------------------------------------------------------
 # Database operations
 # ---------------------------------------------------------------------------
+
+def _linkedin_blocked_reason(conn, worker_id: int) -> str | None:
+    """Why LinkedIn jobs can't be applied to right now (None = they can)."""
+    global _linkedin_paused
+    from applypilot import linkedin
+
+    with _linkedin_lock:
+        if _linkedin_paused:
+            return _linkedin_paused
+        reason = None
+        if not linkedin.worker_will_have_session(worker_id):
+            reason = "not signed in to LinkedIn (run `applypilot linkedin-login`)"
+        elif linkedin.applied_last_24h(conn) >= linkedin.daily_limit():
+            reason = f"LinkedIn daily limit reached ({linkedin.daily_limit()} in 24h, LINKEDIN_DAILY_LIMIT)"
+        if reason:
+            _linkedin_paused = reason
+            add_event(f"LinkedIn jobs skipped: {reason}")
+            logger.info("LinkedIn jobs skipped: %s", reason)
+        return reason
+
 
 def acquire_job(target_url: str | None = None, min_score: int = 7,
                 worker_id: int = 0) -> dict | None:
@@ -111,6 +136,9 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
             if blocked_patterns:
                 url_clauses = " ".join(f"AND url NOT LIKE ?" for _ in blocked_patterns)
                 params.extend(blocked_patterns)
+            linkedin_clause = ""
+            if _linkedin_blocked_reason(conn, worker_id):
+                linkedin_clause = "AND COALESCE(application_url, url) NOT LIKE '%linkedin.com%'"
             row = conn.execute(f"""
                 SELECT url, title, site, application_url, tailored_resume_path,
                        fit_score, location, full_description, cover_letter_path
@@ -121,6 +149,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
                   AND fit_score >= ?
                   {site_clause}
                   {url_clauses}
+                  {linkedin_clause}
                 ORDER BY fit_score DESC, url
                 LIMIT 1
             """, [config.DEFAULTS["max_apply_attempts"]] + params).fetchone()
@@ -424,6 +453,8 @@ PERMANENT_FAILURES: set[str] = {
     "site_blocked", "cloudflare_blocked", "blocked_by_cloudflare",
 }
 
+from applypilot.linkedin import SESSION_FAILURES as _LINKEDIN_SESSION_FAILURES  # noqa: E402
+
 PERMANENT_PREFIXES: tuple[str, ...] = ("site_blocked", "cloudflare", "blocked_by")
 
 
@@ -459,6 +490,7 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
     Returns:
         Tuple of (applied_count, failed_count).
     """
+    global _linkedin_paused
     applied = 0
     failed = 0
     continuous = limit == 0
@@ -509,6 +541,14 @@ def worker_loop(worker_id: int = 0, limit: int = 1,
                 applied += 1
                 update_state(worker_id, jobs_applied=applied,
                              jobs_done=applied + failed)
+            elif (result.split(":", 1)[-1] if ":" in result else result) in _LINKEDIN_SESSION_FAILURES:
+                # Not this job's fault: keep it queued and stop LinkedIn jobs for this run.
+                reason = result.split(":", 1)[-1]
+                release_lock(job["url"])
+                with _linkedin_lock:
+                    _linkedin_paused = reason
+                add_event(f"[W{worker_id}] LinkedIn paused ({reason}); run `applypilot linkedin-login`")
+                continue
             else:
                 reason = result.split(":", 1)[-1] if ":" in result else result
                 mark_result(job["url"], "failed", reason,
@@ -563,8 +603,9 @@ def main(limit: int = 1, target_url: str | None = None,
         poll_interval: Seconds between DB polls when queue is empty.
         workers: Number of parallel workers (default 1).
     """
-    global POLL_INTERVAL
+    global POLL_INTERVAL, _linkedin_paused
     POLL_INTERVAL = poll_interval
+    _linkedin_paused = None
     _stop_event.clear()
 
     config.ensure_dirs()
