@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from applypilot.config import COVER_LETTER_DIR, RESUME_PATH, load_profile
 from applypilot.database import get_connection, get_jobs_by_stage
 from applypilot.llm import get_client
+from applypilot.scoring import stories as story_mod
 from applypilot.scoring.validator import (
     BANNED_WORDS,
     LLM_LEAK_PHRASES,
@@ -71,7 +72,7 @@ STRUCTURE: 3 short paragraphs. Under 250 words. Every sentence must earn its pla
 
 PARAGRAPH 1 (2-3 sentences): Open with a specific thing YOU built that solves THEIR problem. Not "I'm excited about this role." Not "This role aligns with my experience." Start with the work.
 
-PARAGRAPH 2 (3-4 sentences): Pick 2 achievements from the resume that are MOST relevant to THIS job. Use numbers. Frame as solving their problem, not listing your accomplishments.{projects_hint}{metrics_hint}
+PARAGRAPH 2 (3-5 sentences): If STORIES are provided, tell STORY 1 as a short narrative in first person: the situation, what you did, and the result, in that order. Make it feel like a real moment, not a bullet point. Use ONLY the facts in the story (its situation, action, result, numbers and the candidate's own notes); do not add details, people, numbers or outcomes that are not there. If a second story is provided and fits, give it one sentence. If no stories are provided, pick 2 achievements from the resume that are MOST relevant to THIS job. Frame everything as solving their problem.{projects_hint}{metrics_hint}
 
 PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job description (a product, a technical challenge, a team structure). Then close. "Happy to walk through any of this in more detail." or "Let's discuss." Nothing else.
 
@@ -91,6 +92,7 @@ VOICE:
 - Read it out loud. If it sounds like a robot wrote it, rewrite it.
 
 FABRICATION = INSTANT REJECTION:
+Every number in the letter must appear in the resume, the stories, or the job description. An automated check rejects any other number.
 The candidate's real tools are ONLY: {skills_str}.
 Do NOT mention ANY tool not in this list. If the job asks for tools not listed, talk about the work you did, not the tools.
 
@@ -120,6 +122,7 @@ def _strip_preamble(text: str) -> str:
 def generate_cover_letter(
     resume_text: str, job: dict, profile: dict,
     max_retries: int = 3, validation_mode: str = "normal",
+    story_bank: list[dict] | None = None,
 ) -> str:
     """Generate a cover letter with fresh context on each retry + auto-sanitize.
 
@@ -148,6 +151,10 @@ def generate_cover_letter(
     client = get_client()
     cl_prompt_base = _build_cover_letter_prompt(profile)
 
+    picks = story_mod.select_stories(story_bank or [], job) if story_bank else []
+    stories_text = story_mod.format_for_prompt(picks) if picks else ""
+    allowed = story_mod.allowed_numbers(resume_text, story_bank or [], job)
+
     for attempt in range(max_retries + 1):
         # Fresh conversation every attempt
         prompt = cl_prompt_base
@@ -160,7 +167,8 @@ def generate_cover_letter(
             {"role": "system", "content": prompt},
             {"role": "user", "content": (
                 f"RESUME:\n{resume_text}\n\n---\n\n"
-                f"TARGET JOB:\n{job_text}\n\n"
+                + (f"STORIES (true, from the candidate's story bank):\n{stories_text}\n\n---\n\n" if stories_text else "")
+                + f"TARGET JOB:\n{job_text}\n\n"
                 "Write the cover letter:"
             )},
         ]
@@ -169,7 +177,7 @@ def generate_cover_letter(
         letter = sanitize_text(letter)  # auto-fix em dashes, smart quotes
         letter = _strip_preamble(letter)  # remove any "Here is the letter:" prefix
 
-        validation = validate_cover_letter(letter, mode=validation_mode)
+        validation = validate_cover_letter(letter, mode=validation_mode, allowed_numbers=allowed)
         if validation["passed"]:
             return letter
 
@@ -180,7 +188,11 @@ def generate_cover_letter(
             attempt + 1, max_retries + 1, validation["errors"],
         )
 
-    return letter  # last attempt even if failed
+    # Upstream returned the last attempt even if it failed. Keep that for style
+    # issues, but never ship a letter with invented numbers.
+    if any(e.startswith("Numbers not in the resume") for e in validation["errors"]):
+        raise ValueError(f"Cover letter kept inventing numbers: {validation['errors']}")
+    return letter  # last attempt even if it has style warnings/errors
 
 
 # ── Batch Entry Point ────────────────────────────────────────────────────
@@ -200,6 +212,13 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
     profile = load_profile()
     resume_text = RESUME_PATH.read_text(encoding="utf-8")
     conn = get_connection()
+
+    # Story bank: built once from the resume, then user-editable (~/.applypilot/stories.yaml).
+    try:
+        story_bank = story_mod.build_story_bank(resume_text, profile)
+    except Exception as exc:
+        log.warning("Story bank unavailable (%s); letters will use resume achievements only.", exc)
+        story_bank = []
 
     # Fetch jobs that have tailored resumes but no cover letter yet
     jobs = conn.execute(
@@ -235,7 +254,8 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
         completed += 1
         try:
             letter = generate_cover_letter(resume_text, job, profile,
-                                          validation_mode=validation_mode)
+                                          validation_mode=validation_mode,
+                                          story_bank=story_bank)
 
             # Build safe filename prefix
             safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")

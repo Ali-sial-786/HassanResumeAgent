@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 import typer
@@ -71,6 +72,90 @@ def init() -> None:
     from applypilot.wizard.init import run_wizard
 
     run_wizard()
+
+
+@app.command()
+def login(
+    device: bool = typer.Option(False, "--device", help="Use a device code (for headless/remote machines)."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Print the sign-in URL instead of opening a browser."),
+) -> None:
+    """Sign in with your ChatGPT account (Plus/Pro/Team) to power ApplyPilot via Codex."""
+    from applypilot.config import ensure_dirs, load_env
+    from applypilot.providers import codex_auth
+
+    load_env()
+    ensure_dirs()
+    try:
+        path = codex_auth.login_device(echo=console.print) if device else codex_auth.login_browser(
+            open_browser=not no_browser, echo=console.print
+        )
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    info = codex_auth.describe()
+    console.print(f"[green]Signed in[/green] as {info.get('email') or 'ChatGPT user'} "
+                  f"({info.get('plan') or 'plan unknown'}). Tokens saved to {path}")
+
+
+@app.command()
+def logout() -> None:
+    """Remove ApplyPilot's saved ChatGPT sign-in (does not touch ~/.codex)."""
+    from applypilot.providers import codex_auth
+
+    if codex_auth.logout():
+        console.print("[green]Signed out.[/green]")
+    else:
+        console.print("No ApplyPilot ChatGPT login was stored.")
+    if codex_auth.codex_cli_auth_path().exists():
+        console.print(f"[dim]Note: a Codex CLI login at {codex_auth.codex_cli_auth_path()} is still used "
+                      "unless you set CODEX_USE_CLI_AUTH=0.[/dim]")
+
+
+@app.command()
+def stories(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Regenerate the story bank from your resume (overwrites edits)."),
+) -> None:
+    """Build or show your story bank: real STAR stories from your resume, used in cover letters."""
+    _bootstrap()
+    from applypilot.config import RESUME_PATH, load_profile
+    from applypilot.scoring import stories as story_mod
+
+    if not RESUME_PATH.exists():
+        console.print("[red]No resume.txt found.[/red] Run [bold]applypilot init[/bold] first.")
+        raise typer.Exit(code=1)
+    try:
+        bank = story_mod.build_story_bank(RESUME_PATH.read_text(encoding="utf-8"), load_profile(), force=rebuild)
+    except Exception as exc:
+        console.print(f"[red]Could not build the story bank: {exc}[/red]")
+        raise typer.Exit(code=1)
+    table = Table(title=f"Story bank ({len(bank)} stories)")
+    table.add_column("id", style="cyan")
+    table.add_column("story")
+    table.add_column("result")
+    for s in bank:
+        table.add_row(s["id"], f"{s.get('title', '')}\n[dim]{s.get('employer', '')}[/dim]", str(s.get("result", ""))[:90])
+    console.print(table)
+    console.print(f"\nEdit [bold]{story_mod.STORIES_PATH}[/bold] to fix stories or add true details in `my_notes`.")
+
+
+@app.command()
+def models() -> None:
+    """Show the active LLM provider and, for ChatGPT sign-in, the models your plan offers."""
+    _bootstrap()
+    from applypilot.llm import get_client
+
+    try:
+        client = get_client()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"Provider: [bold]{client.name}[/bold]   default model: [bold]{client.model}[/bold]")
+    if hasattr(client, "list_models"):
+        try:
+            console.print("Available: " + ", ".join(client.list_models()))
+        except Exception as exc:
+            console.print(f"[yellow]Could not list models: {exc}[/yellow]")
+    console.print("[dim]Set LLM_MODEL in ~/.applypilot/.env to choose one.[/dim]")
 
 
 @app.command()
@@ -147,7 +232,7 @@ def apply(
     limit: Optional[int] = typer.Option(None, "--limit", "-l", help="Max applications to submit."),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel browser workers."),
     min_score: int = typer.Option(7, "--min-score", help="Minimum fit score for job selection."),
-    model: str = typer.Option("haiku", "--model", "-m", help="Claude model name."),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the apply-agent model (else APPLY_LLM_MODEL / LLM_MODEL / provider default)."),
     continuous: bool = typer.Option(False, "--continuous", "-c", help="Run forever, polling for new jobs."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without submitting."),
     headless: bool = typer.Option(False, "--headless", help="Run browsers in headless mode."),
@@ -186,7 +271,10 @@ def apply(
 
     # --- Full apply mode ---
 
-    # Check 1: Tier 3 required (Claude Code CLI + Chrome)
+    if model:
+        os.environ["APPLY_LLM_MODEL"] = model
+
+    # Check 1: Tier 3 required (LLM provider + Chrome + npx)
     check_tier(3, "auto-apply")
 
     # Check 2: Profile exists
@@ -211,7 +299,7 @@ def apply(
             raise typer.Exit(code=1)
 
     if gen:
-        from applypilot.apply.launcher import gen_prompt, BASE_CDP_PORT
+        from applypilot.apply.launcher import gen_prompt
         target = url or ""
         if not target:
             console.print("[red]--gen requires --url to specify which job.[/red]")
@@ -222,12 +310,8 @@ def apply(
             raise typer.Exit(code=1)
         mcp_path = _profile_path.parent / ".mcp-apply-0.json"
         console.print(f"[green]Wrote prompt to:[/green] {prompt_file}")
-        console.print(f"\n[bold]Run manually:[/bold]")
-        console.print(
-            f"  claude --model {model} -p "
-            f"--mcp-config {mcp_path} "
-            f"--permission-mode bypassPermissions < {prompt_file}"
-        )
+        console.print(f"[green]Wrote MCP config to:[/green] {mcp_path}")
+        console.print("Feed both to any MCP-capable agent to replay this application by hand.")
         return
 
     from applypilot.apply.launcher import main as apply_main
@@ -237,7 +321,13 @@ def apply(
     console.print("\n[bold blue]Launching Auto-Apply[/bold blue]")
     console.print(f"  Limit:    {'unlimited' if continuous else effective_limit}")
     console.print(f"  Workers:  {workers}")
-    console.print(f"  Model:    {model}")
+    try:
+        from applypilot.llm import detect_provider_name
+        _prov = detect_provider_name("apply")
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"  Provider: {_prov}{f' ({model})' if model else ''}")
     console.print(f"  Headless: {headless}")
     console.print(f"  Dry run:  {dry_run}")
     if url:
@@ -338,7 +428,7 @@ def doctor() -> None:
     import shutil
     from applypilot.config import (
         load_env, PROFILE_PATH, RESUME_PATH, RESUME_PDF_PATH,
-        SEARCH_CONFIG_PATH, ENV_PATH, get_chrome_path,
+        SEARCH_CONFIG_PATH, get_chrome_path,
     )
 
     load_env()
@@ -380,30 +470,22 @@ def doctor() -> None:
 
     # --- Tier 2 checks ---
     import os
-    has_gemini = bool(os.environ.get("GEMINI_API_KEY"))
-    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    has_local = bool(os.environ.get("LLM_URL"))
-    if has_gemini:
-        model = os.environ.get("LLM_MODEL", "gemini-2.0-flash")
-        results.append(("LLM API key", ok_mark, f"Gemini ({model})"))
-    elif has_openai:
-        model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
-        results.append(("LLM API key", ok_mark, f"OpenAI ({model})"))
-    elif has_local:
-        results.append(("LLM API key", ok_mark, f"Local: {os.environ.get('LLM_URL')}"))
+    from applypilot.llm import detect_provider_name
+    from applypilot.providers import codex_auth
+    login = codex_auth.describe()
+    if login:
+        results.append(("ChatGPT sign-in", ok_mark,
+                        f"{login.get('email') or 'signed in'} ({login.get('plan') or 'plan unknown'}) via {login['source']}"))
     else:
-        results.append(("LLM API key", fail_mark,
-                        "Set GEMINI_API_KEY in ~/.applypilot/.env (run 'applypilot init')"))
+        results.append(("ChatGPT sign-in", warn_mark, "Run 'applypilot login' to use your ChatGPT subscription"))
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        results.append(("Claude API key", ok_mark, f"ANTHROPIC_API_KEY set ({os.environ.get('LLM_MODEL') or 'claude-opus-5-5'})"))
+    try:
+        results.append(("Active LLM", ok_mark, f"text: {detect_provider_name('text')}, apply: {detect_provider_name('apply')}"))
+    except RuntimeError as exc:
+        results.append(("Active LLM", fail_mark, str(exc)))
 
     # --- Tier 3 checks ---
-    # Claude Code CLI
-    claude_bin = shutil.which("claude")
-    if claude_bin:
-        results.append(("Claude Code CLI", ok_mark, claude_bin))
-    else:
-        results.append(("Claude Code CLI", fail_mark,
-                        "Install from https://claude.ai/code (needed for auto-apply)"))
-
     # Chrome
     try:
         chrome_path = get_chrome_path()
@@ -445,10 +527,10 @@ def doctor() -> None:
     console.print(f"[bold]Current tier: Tier {tier} — {TIER_LABELS[tier]}[/bold]")
 
     if tier == 1:
-        console.print("[dim]  → Tier 2 unlocks: scoring, tailoring, cover letters (needs LLM API key)[/dim]")
-        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Claude Code CLI + Chrome + Node.js)[/dim]")
+        console.print("[dim]  → Tier 2 unlocks: scoring, tailoring, cover letters (needs `applypilot login` or an API key)[/dim]")
+        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Chrome + Node.js)[/dim]")
     elif tier == 2:
-        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Claude Code CLI + Chrome + Node.js)[/dim]")
+        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Chrome + Node.js)[/dim]")
 
     console.print()
 

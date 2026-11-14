@@ -245,16 +245,40 @@ def _setup_ai_features() -> None:
         console.print("[dim]Discovery-only mode. You can configure AI later with [bold]applypilot init[/bold].[/dim]")
         return
 
-    console.print("Supported providers: [bold]Gemini[/bold] (recommended, free tier), OpenAI, local (Ollama/llama.cpp)")
+    console.print(
+        "Providers:\n"
+        "  [bold]codex[/bold]      Sign in with ChatGPT (uses your Plus/Pro subscription, no API key) [recommended]\n"
+        "  [bold]anthropic[/bold]  Claude API key\n"
+        "  gemini / openai / local"
+    )
     provider = Prompt.ask(
         "Provider",
-        choices=["gemini", "openai", "local"],
-        default="gemini",
+        choices=["codex", "anthropic", "gemini", "openai", "local"],
+        default="codex",
     )
 
-    env_lines = ["# ApplyPilot configuration", ""]
+    env_lines = ["# ApplyPilot configuration", "", f"LLM_PROVIDER={provider}"]
 
-    if provider == "gemini":
+    if provider == "codex":
+        from applypilot.providers import codex_auth
+        if codex_auth.has_credentials():
+            console.print(f"[green]Found a ChatGPT sign-in ({codex_auth.describe().get('source')}).[/green]")
+        elif Confirm.ask("Sign in with ChatGPT now?", default=True):
+            try:
+                codex_auth.login_browser(echo=console.print)
+                console.print("[green]Signed in.[/green]")
+            except RuntimeError as exc:
+                console.print(f"[yellow]{exc}[/yellow]\nRun [bold]applypilot login[/bold] (or [bold]--device[/bold]) later.")
+        else:
+            console.print("[dim]Run [bold]applypilot login[/bold] before scoring or applying.[/dim]")
+        if Confirm.ask("Also add a Claude API key as a backup (used automatically if ChatGPT usage limits are hit)?", default=False):
+            env_lines.append(f"ANTHROPIC_API_KEY={Prompt.ask('Anthropic API key (console.anthropic.com)', password=True)}")
+    elif provider == "anthropic":
+        api_key = Prompt.ask("Anthropic API key (console.anthropic.com)", password=True)
+        model = Prompt.ask("Model", default="claude-opus-5-5")
+        env_lines.append(f"ANTHROPIC_API_KEY={api_key}")
+        env_lines.append(f"LLM_MODEL={model}")
+    elif provider == "gemini":
         api_key = Prompt.ask("Gemini API key (from aistudio.google.com)")
         model = Prompt.ask("Model", default="gemini-2.0-flash")
         env_lines.append(f"GEMINI_API_KEY={api_key}")
@@ -280,25 +304,24 @@ def _setup_ai_features() -> None:
 # ---------------------------------------------------------------------------
 
 def _setup_auto_apply() -> None:
-    """Configure autonomous job application (requires Claude Code CLI)."""
+    """Configure autonomous job application (native browser agent)."""
     console.print(Panel(
         "[bold]Step 5: Auto-Apply (optional)[/bold]\n"
-        "ApplyPilot can autonomously fill and submit job applications\n"
-        "using Claude Code as the browser agent."
+        "ApplyPilot can autonomously fill and submit job applications.\n"
+        "Your chosen LLM drives Chrome through the Playwright MCP server (needs Node.js)."
     ))
 
     if not Confirm.ask("Enable autonomous job applications?", default=True):
         console.print("[dim]You can apply manually using the tailored resumes ApplyPilot generates.[/dim]")
         return
 
-    # Check for Claude Code CLI
-    if shutil.which("claude"):
-        console.print("[green]Claude Code CLI detected.[/green]")
+    if shutil.which("npx"):
+        console.print("[green]Node.js (npx) detected.[/green]")
     else:
         console.print(
-            "[yellow]Claude Code CLI not found on PATH.[/yellow]\n"
-            "Install it from: [bold]https://claude.ai/code[/bold]\n"
-            "Auto-apply won't work until Claude Code is installed."
+            "[yellow]Node.js (npx) not found on PATH.[/yellow]\n"
+            "Install it from: [bold]https://nodejs.org[/bold]\n"
+            "Auto-apply won't work until Node.js is installed."
         )
 
     # Optional: CapSolver for CAPTCHAs
@@ -356,7 +379,7 @@ def run_wizard() -> None:
     _setup_ai_features()
     console.print()
 
-    # Step 5: Auto-apply (Claude Code detection)
+    # Step 5: Auto-apply (Node.js detection)
     _setup_auto_apply()
     console.print()
 
@@ -380,7 +403,7 @@ def run_wizard() -> None:
     if tier == 1:
         unlock_hint = "\n[dim]To unlock Tier 2: configure an LLM API key (re-run [bold]applypilot init[/bold]).[/dim]"
     elif tier == 2:
-        unlock_hint = "\n[dim]To unlock Tier 3: install Claude Code CLI + Chrome.[/dim]"
+        unlock_hint = "\n[dim]To unlock Tier 3: install Chrome + Node.js.[/dim]"
 
     console.print(
         Panel.fit(

@@ -1,7 +1,7 @@
 [project]
 name = "applypilot"
-version = "0.3.0"
-description = "AI-powered end-to-end job application pipeline"
+version = "0.4.0"
+description = "AI job application agent: discovery, story-driven cover letters and auto-apply, powered by ChatGPT sign-in or Claude"
 readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.11"
@@ -26,7 +26,10 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "pandas>=2.0",
-    ]
+    "python-jobspy>=1.4",
+    "anthropic>=2.0",
+    "mcp>=1.10",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.1"]
@@ -48,6 +51,10 @@ packages = ["src/applypilot"]
 
 [tool.hatch.build]
 artifacts = ["src/applypilot/config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
 
 [tool.ruff]
 target-version = "py311"

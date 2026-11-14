@@ -1,195 +1,142 @@
-<!-- logo here -->
+# HassanResumeAgent
 
-> **⚠️ ApplyPilot** is the original open-source project, created by [Pickle-Pixel](https://github.com/Pickle-Pixel) and first published on GitHub on **February 17, 2026**. We are **not affiliated** with applypilot.app, useapplypilot.com, or any other product using the "ApplyPilot" name. These sites are **not associated with this project** and may misrepresent what they offer. If you're looking for the autonomous, open-source job application agent — you're in the right place.
+An AI job-application agent: it finds jobs that match your criteria, scores them against your resume, tailors the resume, writes a cover letter built around a **real story from your experience**, and fills in and submits the application in a browser.
 
-# ApplyPilot
+It runs on your **ChatGPT subscription** (sign in with ChatGPT, through the Codex backend), or on a **Claude API key**. Gemini, OpenAI and local models still work too.
 
-**Applied to 1,000 jobs in 2 days. Fully autonomous. Open source.**
-
-[![PyPI version](https://img.shields.io/pypi/v/applypilot?color=blue)](https://pypi.org/project/applypilot/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Pickle-Pixel/ApplyPilot?style=social)](https://github.com/Pickle-Pixel/ApplyPilot)
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S6S01UL5IO)
-
-
-
-
-https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
-
+This is a fork of [ApplyPilot](https://github.com/Pickle-Pixel/ApplyPilot) by Pickle-Pixel (AGPL-3.0). See [What this fork changes](#what-this-fork-changes).
 
 ---
 
-## What It Does
+## Quick start
 
-ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs across 5+ boards, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
-
-Three commands. That's it.
+Needs Python 3.11+, Node.js 18+ (for `npx`) and Chrome or Chromium.
 
 ```bash
-pip install applypilot
-pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex
-applypilot init          # one-time setup: resume, profile, preferences, API keys
-applypilot doctor        # verify your setup — shows what's installed and what's missing
-applypilot run           # discover > enrich > score > tailor > cover letters
-applypilot run -w 4      # same but parallel (4 threads for discovery/enrichment)
-applypilot apply         # autonomous browser-driven submission
-applypilot apply -w 3    # parallel apply (3 Chrome instances)
-applypilot apply --dry-run  # fill forms without submitting
+git clone <this repo> && cd HassanResumeAgent
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+applypilot init        # resume, profile, job criteria, AI provider (choose "codex")
+applypilot login       # sign in with ChatGPT (opens a browser)
+applypilot doctor      # check that everything is ready
+
+applypilot run         # discover > enrich > score > tailor > cover letters
+applypilot stories     # review the story bank your cover letters draw on
+applypilot apply --dry-run --limit 3   # fill 3 applications WITHOUT submitting; watch it work
+applypilot apply --limit 10            # submit for real
 ```
 
-> **Why two install commands?** `python-jobspy` pins an exact numpy version in its metadata that conflicts with pip's resolver, but works fine at runtime with any modern numpy. The `--no-deps` flag bypasses the resolver; the second command installs jobspy's actual runtime dependencies. Everything except `python-jobspy` installs normally.
+On a remote or headless machine, use `applypilot login --device` and enter the code at https://auth.openai.com/codex/device from your phone or laptop.
+
+If you already use the Codex CLI (`codex login`), ApplyPilot reuses that login automatically.
 
 ---
 
-## Two Paths
+## Pick your AI
 
-### Full Pipeline (recommended)
-**Requires:** Python 3.11+, Node.js (for npx), Gemini API key (free), Claude Code CLI, Chrome
+Set `LLM_PROVIDER` in `~/.applypilot/.env` (the wizard writes it for you):
 
-Runs all 6 stages, from job discovery to autonomous application submission. This is the full power of ApplyPilot.
+| `LLM_PROVIDER` | What you need | Notes |
+|---|---|---|
+| `codex` (default) | A ChatGPT Plus/Pro/Team plan + `applypilot login` | No per-token bill. Your plan's usage limits apply. The model is chosen from your plan's catalog (`applypilot models` lists them). |
+| `anthropic` | `ANTHROPIC_API_KEY` | Default model `claude-opus-5-5`. Pay per token. |
+| `gemini` / `openai` / `local` | `GEMINI_API_KEY` / `OPENAI_API_KEY` / `LLM_URL` | Upstream's original providers. |
 
-### Discovery + Tailoring Only
-**Requires:** Python 3.11+, Gemini API key (free)
-
-Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cover letters. You submit applications manually with the AI-prepared materials.
-
----
-
-## The Pipeline
-
-| Stage | What Happens |
-|-------|-------------|
-| **1. Discover** | Scrapes 5 job boards (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs) + 48 Workday employer portals + 30 direct career sites |
-| **2. Enrich** | Fetches full job descriptions via JSON-LD, CSS selectors, or AI-powered extraction |
-| **3. Score** | AI rates every job 1-10 based on your resume and preferences. Only high-fit jobs proceed |
-| **4. Tailor** | AI rewrites your resume per job: reorganizes, emphasizes relevant experience, adds keywords. Never fabricates |
-| **5. Cover Letter** | AI generates a targeted cover letter per job |
-| **6. Auto-Apply** | Claude Code navigates application forms, fills fields, uploads documents, answers questions, and submits |
-
-Each stage is independent. Run them all or pick what you need.
-
----
-
-## ApplyPilot vs The Alternatives
-
-| Feature | ApplyPilot | AIHawk | Manual |
-|---------|-----------|--------|--------|
-| Job discovery | 5 boards + Workday + direct sites | LinkedIn only | One board at a time |
-| AI scoring | 1-10 fit score per job | Basic filtering | Your gut feeling |
-| Resume tailoring | Per-job AI rewrite | Template-based | Hours per application |
-| Auto-apply | Full form navigation + submission | LinkedIn Easy Apply only | Click, type, repeat |
-| Supported sites | Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs, 46 Workday portals, 28 direct sites | LinkedIn | Whatever you open |
-| License | AGPL-3.0 | MIT | N/A |
-
----
-
-## Requirements
-
-| Component | Required For | Details |
-|-----------|-------------|---------|
-| Python 3.11+ | Everything | Core runtime |
-| Node.js 18+ | Auto-apply | Needed for `npx` to run Playwright MCP server |
-| Gemini API key | Scoring, tailoring, cover letters | Free tier (15 RPM / 1M tokens/day) is enough |
-| Chrome/Chromium | Auto-apply | Auto-detected on most systems |
-| Claude Code CLI | Auto-apply | Install from [claude.ai/code](https://claude.ai/code) |
-
-**Gemini API key is free.** Get one at [aistudio.google.com](https://aistudio.google.com). OpenAI and local models (Ollama/llama.cpp) are also supported.
-
-### Optional
-
-| Component | What It Does |
-|-----------|-------------|
-| CapSolver API key | Solves CAPTCHAs during auto-apply (hCaptcha, reCAPTCHA, Turnstile, FunCaptcha). Without it, CAPTCHA-blocked applications just fail gracefully |
-
-> **Note:** python-jobspy is installed separately with `--no-deps` because it pins an exact numpy version in its metadata that conflicts with pip's resolver. It works fine with modern numpy at runtime.
-
----
-
-## Configuration
-
-All generated by `applypilot init`:
-
-### `profile.json`
-Your personal data in one structured file: contact info, work authorization, compensation, experience, skills, resume facts (preserved during tailoring), and EEO defaults. Powers scoring, tailoring, and form auto-fill.
-
-### `searches.yaml`
-Job search queries, target titles, locations, boards. Run multiple searches with different parameters.
-
-### `.env`
-API keys and runtime config: `GEMINI_API_KEY`, `LLM_MODEL`, `CAPSOLVER_API_KEY` (optional).
-
-### Package configs (shipped with ApplyPilot)
-- `config/employers.yaml` - Workday employer registry (48 preconfigured)
-- `config/sites.yaml` - Direct career sites (30+), blocked sites, base URLs, manual ATS domains
-- `config/searches.example.yaml` - Example search configuration
-
----
-
-## How Stages Work
-
-### Discover
-Queries Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs via JobSpy. Scrapes 48 Workday employer portals (configurable in `employers.yaml`). Hits 30 direct career sites with custom extractors. Deduplicates by URL.
-
-### Enrich
-Visits each job URL and extracts the full description. 3-tier cascade: JSON-LD structured data, then CSS selector patterns, then AI-powered extraction for unknown layouts.
-
-### Score
-AI scores every job 1-10 against your profile. 9-10 = strong match, 7-8 = good, 5-6 = moderate, 1-4 = skip. Only jobs above your threshold proceed to tailoring.
-
-### Tailor
-Generates a custom resume per job: reorders experience, emphasizes relevant skills, incorporates keywords from the job description. Your `resume_facts` (companies, projects, metrics) are preserved exactly. The AI reorganizes but never fabricates.
-
-### Cover Letter
-Writes a targeted cover letter per job referencing the specific company, role, and how your experience maps to their requirements.
-
-### Auto-Apply
-Claude Code launches a Chrome instance, navigates to each application page, detects the form type, fills personal information and work history, uploads the tailored resume and cover letter, answers screening questions with AI, and submits. A live dashboard shows progress in real-time.
-
-The Playwright MCP server is configured automatically at runtime per worker. No manual MCP setup needed.
+Useful settings:
 
 ```bash
-# Utility modes (no Chrome/Claude needed)
-applypilot apply --mark-applied URL    # manually mark a job as applied
-applypilot apply --mark-failed URL     # manually mark a job as failed
-applypilot apply --reset-failed        # reset all failed jobs for retry
-applypilot apply --gen --url URL       # generate prompt file for manual debugging
+LLM_PROVIDER=codex
+ANTHROPIC_API_KEY=sk-ant-...      # optional with codex: used automatically if ChatGPT usage limits are hit
+LLM_MODEL=                        # override the model for the chosen provider
+APPLY_LLM_PROVIDER=anthropic      # optional: a different provider just for the browser agent
+APPLY_LLM_MODEL=
+CODEX_EFFORT=medium               # reasoning effort on the ChatGPT backend (low/medium/high)
+ANTHROPIC_EFFORT=medium           # effort for Claude
 ```
+
+> The ChatGPT/Codex endpoint is not an official public API. It is the same one the open-source Codex CLI uses, and third-party tools rely on it, but OpenAI can change or restrict it at any time. If it breaks, set `LLM_PROVIDER=anthropic`.
 
 ---
 
-## CLI Reference
+## Choosing which jobs to apply to
 
-```
-applypilot init                         # First-time setup wizard
-applypilot doctor                       # Verify setup, diagnose missing requirements
-applypilot run [stages...]              # Run pipeline stages (or 'all')
-applypilot run --workers 4              # Parallel discovery/enrichment
-applypilot run --stream                 # Concurrent stages (streaming mode)
-applypilot run --min-score 8            # Override score threshold
-applypilot run --dry-run                # Preview without executing
-applypilot run --validation lenient     # Relax validation (recommended for Gemini free tier)
-applypilot run --validation strict      # Strictest validation (retries on any banned word)
-applypilot apply                        # Launch auto-apply
-applypilot apply --workers 3            # Parallel browser workers
-applypilot apply --dry-run              # Fill forms without submitting
-applypilot apply --continuous           # Run forever, polling for new jobs
-applypilot apply --headless             # Headless browser mode
-applypilot apply --url URL              # Apply to a specific job
-applypilot status                       # Pipeline statistics
-applypilot dashboard                    # Open HTML results dashboard
-```
+Everything lives in `~/.applypilot/` (created by `applypilot init`):
+
+- **`searches.yaml`**: your criteria. Job titles to search (`queries`), `locations` (including remote), location accept/reject patterns, which boards to use (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs), how fresh postings must be (`hours_old`), and title keywords to skip (`exclude_titles`). See [`searches.example.yaml`](src/applypilot/config/searches.example.yaml).
+- **`profile.json`**: contact details, work authorization, salary expectations, your real skills (the AI may not claim anything outside this list), and EEO answers.
+- **Score threshold**: only jobs the AI rates at or above `--min-score` (default 7/10) get tailored resumes, cover letters and applications.
 
 ---
 
-## Contributing
+## Cover letters with real stories
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and PR guidelines.
+Generic cover letters list skills. Good ones tell one short, specific story. That's also where AI is most tempted to make things up, so this fork adds a **story bank**:
+
+1. On the first cover-letter run (or `applypilot stories`), the AI turns each accomplishment on your resume into a STAR story (situation, task, action, result) and quotes the resume lines it came from.
+2. Stories whose quotes aren't actually in your resume are thrown out, and numbers that aren't in your resume are removed.
+3. The bank is saved to `~/.applypilot/stories.yaml`. **Read it.** Delete anything wrong. In `my_notes`, add true details your resume leaves out: what made the problem hard, who was affected, what you learned. Those notes make the stories feel like you, and the AI uses them as facts.
+4. For each job, the AI picks the one or two stories that fit the posting best and tells them as a short narrative.
+5. Before a letter is saved, a check rejects it if it contains any number not found in your resume, story bank or the job posting. After several failed retries, the letter is not saved at all.
+
+Regenerate the bank with `applypilot stories --rebuild` (this overwrites your edits).
 
 ---
+
+## How applying works
+
+For each job, ApplyPilot starts Chrome with a dedicated profile and launches the [Playwright MCP](https://github.com/microsoft/playwright-mcp) browser server. Your chosen model then drives the browser through it: navigate, read the page, fill fields, upload the tailored resume and cover letter PDFs, answer screening questions from your profile, and submit. Results (`applied`, `expired`, `captcha`, `login_issue`, `failed:<reason>`) go into the local database; `applypilot status` and `applypilot dashboard` show them.
+
+- `--dry-run` fills everything but stops before the final Submit. Use it first.
+- `--workers 3` runs three browsers in parallel.
+- Ctrl+C once skips the current job; twice stops.
+- `CAPSOLVER_API_KEY` (optional) lets the agent solve CAPTCHAs; without it those jobs are marked `captcha`.
+- `APPLY_GMAIL_MCP=1` (optional) lets the agent read verification codes from Gmail (read/search/send only).
+
+**Browser profile:** the agent uses its own Chrome profile under `~/.applypilot/chrome-workers/`. Sign in to job sites in it once and the sessions persist. Upstream copied your real Chrome profile, which would give the AI-driven browser all your logged-in accounts; that's now opt-in (`APPLY_CLONE_CHROME_PROFILE=1`) and not recommended.
+
+---
+
+## Be careful
+
+- **Accuracy is on you.** The pipeline is built not to fabricate, but read the tailored resumes, `stories.yaml` and a sample of cover letters before running `apply` at volume.
+- **Job-site terms.** Automated applying and scraping go against the terms of some sites (LinkedIn especially), and accounts can be restricted. Prefer company career pages and ATS forms (Greenhouse, Lever, Workday...).
+- **Prompt injection.** Job pages are untrusted. The agent is told to ignore instructions found on web pages, the tool that runs arbitrary code is hidden from it, and it runs in its own browser profile, but don't give it more access than it needs.
+- **Volume.** Ten well-matched applications beat a thousand random ones. Keep `--min-score` high.
+
+---
+
+## What this fork changes
+
+Compared with ApplyPilot 0.3.0 (`Pickle-Pixel/ApplyPilot@4a8d521`):
+
+**New**
+- `codex` provider: ChatGPT sign-in via the Codex backend (`providers/codex.py`, `providers/codex_auth.py`). Browser PKCE login, device-code login, reuse of `~/.codex/auth.json`, automatic token refresh, model picked from your plan's catalog, usage-limit detection.
+- `anthropic` provider using the official SDK (`providers/anthropic_provider.py`), with automatic fallback from ChatGPT to Claude when ChatGPT usage limits are hit.
+- A native browser agent (`apply/agent.py`) that replaces the `claude -p` subprocess. Any provider can drive Playwright MCP, so Claude Code is no longer required.
+- Story bank (`scoring/stories.py`) and invented-number rejection for cover letters.
+- New commands: `applypilot login | logout | models | stories`.
+
+**Upstream bugs fixed**
+- Location accept/reject patterns in `searches.yaml` were ignored, so non-remote jobs were silently dropped (upstream issue #109).
+- `applypilot apply --url` never matched a job that had not been attempted before (SQL `NULL != 'in_progress'`).
+- Auto-apply crashed on machines without an existing Chrome profile.
+
+**Hardening**
+- Playwright MCP pinned to a tested version (upstream used `@latest`). Its arbitrary-code tool is hidden from the model.
+- Cloning your real Chrome profile is opt-in.
+
+---
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pytest            # provider request formats, agent loops, MCP plumbing, story grounding, filters
+```
+
+Layout: `llm.py` picks the provider; `providers/` holds one module per backend, all implementing `chat()` and `run_agent()`; `apply/agent.py` connects a provider to the MCP browser tools; the rest of the pipeline is upstream ApplyPilot.
 
 ## License
 
-ApplyPilot is licensed under the [GNU Affero General Public License v3.0](LICENSE).
-
-You are free to use, modify, and distribute this software. If you deploy a modified version as a service, you must release your source code under the same license.
+AGPL-3.0, inherited from ApplyPilot. You may use and modify it freely. If you distribute it, or run it as a service for other people, you must publish your source under the same license.

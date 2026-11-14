@@ -5,6 +5,29 @@ All notable changes to ApplyPilot will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-14 (HassanResumeAgent fork)
+
+### Added
+- `codex` LLM provider: sign in with ChatGPT (`applypilot login`, `--device`) and run on a
+  ChatGPT subscription via the Codex backend; reuses an existing Codex CLI login.
+- `anthropic` LLM provider (Claude API key, official SDK), plus automatic fallback from
+  ChatGPT to Claude when ChatGPT usage limits are hit.
+- Native browser agent (`apply/agent.py`) driving Playwright MCP with any provider;
+  the Claude Code CLI is no longer required for auto-apply.
+- Story bank (`applypilot stories`, `~/.applypilot/stories.yaml`): resume-grounded STAR
+  stories narrated in cover letters; letters with invented numbers are rejected.
+- `applypilot logout` and `applypilot models` commands.
+
+### Fixed
+- `searches.yaml` location accept/reject patterns were ignored (upstream #109).
+- `applypilot apply --url` could not select never-attempted jobs.
+- Auto-apply crashed when no Chrome user profile existed.
+
+### Changed
+- Playwright MCP pinned to 0.0.85; `browser_run_code_unsafe` hidden from the model.
+- Copying the real Chrome profile into worker profiles is now opt-in
+  (`APPLY_CLONE_CHROME_PROFILE=1`).
+
 ## [0.2.0] - 2026-02-17
 
 ### Added

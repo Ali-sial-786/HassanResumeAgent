@@ -1,297 +1,193 @@
-"""
-Unified LLM client for ApplyPilot.
+"""LLM provider selection.
 
-Auto-detects provider from environment:
-  GEMINI_API_KEY  -> Google Gemini (default: gemini-2.0-flash)
-  OPENAI_API_KEY  -> OpenAI (default: gpt-4o-mini)
-  LLM_URL         -> Local llama.cpp / Ollama compatible endpoint
+Pick a provider with ``LLM_PROVIDER`` in ``~/.applypilot/.env``:
 
-LLM_MODEL env var overrides the model name for any provider.
+  codex      ChatGPT sign-in (Plus/Pro/Team subscription) via the Codex backend.
+             Run ``applypilot login`` once, or reuse an existing Codex CLI login
+             (~/.codex/auth.json). Default model: see providers/codex.py.
+  anthropic  Claude API key (ANTHROPIC_API_KEY). Default model: claude-opus-5-5.
+  gemini     GEMINI_API_KEY (upstream default).
+  openai     OPENAI_API_KEY (platform API, pay-per-token).
+  local      LLM_URL pointing at an OpenAI-compatible server (llama.cpp, Ollama).
+
+If ``LLM_PROVIDER`` is unset, the first available one wins, in this order:
+codex login -> ANTHROPIC_API_KEY -> GEMINI_API_KEY -> OPENAI_API_KEY -> LLM_URL.
+
+``LLM_MODEL`` overrides the model for whichever provider is chosen.
+With ChatGPT sign-in active and ANTHROPIC_API_KEY also set, a ChatGPT usage-limit
+error switches to Claude for the rest of the run (``ANTHROPIC_MODEL`` picks its
+model; ``LLM_FALLBACK=0`` disables this).
+``APPLY_LLM_PROVIDER`` / ``APPLY_LLM_MODEL`` optionally use a different
+provider or model for the browser apply agent only.
+
+Callers use ``get_client().chat(...)`` / ``.ask(...)`` for text and
+``get_client("apply").run_agent(...)`` for tool-calling.
 """
+
+from __future__ import annotations
 
 import logging
 import os
-import time
+import threading
 
-import httpx
+from applypilot.providers.base import LLMProvider
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Provider detection
-# ---------------------------------------------------------------------------
+PROVIDERS = ("codex", "anthropic", "gemini", "openai", "local")
 
-def _detect_provider() -> tuple[str, str, str]:
-    """Return (base_url, model, api_key) based on environment variables.
 
-    Reads env at call time (not module import time) so that load_env() called
-    in _bootstrap() is always visible here.
-    """
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    local_url = os.environ.get("LLM_URL", "")
-    model_override = os.environ.get("LLM_MODEL", "")
+def _codex_available() -> bool:
+    from applypilot.providers import codex_auth
 
-    if gemini_key and not local_url:
-        return (
-            "https://generativelanguage.googleapis.com/v1beta/openai",
-            model_override or "gemini-2.0-flash",
-            gemini_key,
-        )
+    return codex_auth.has_credentials()
 
-    if openai_key and not local_url:
-        return (
-            "https://api.openai.com/v1",
-            model_override or "gpt-4o-mini",
-            openai_key,
-        )
 
-    if local_url:
-        return (
-            local_url.rstrip("/"),
-            model_override or "local-model",
-            os.environ.get("LLM_API_KEY", ""),
-        )
+def detect_provider_name(role: str = "text") -> str:
+    """Return the provider name for a role ("text" or "apply")."""
+    explicit = ""
+    if role == "apply":
+        explicit = os.environ.get("APPLY_LLM_PROVIDER", "")
+    explicit = (explicit or os.environ.get("LLM_PROVIDER", "")).strip().lower()
+    if explicit:
+        if explicit not in PROVIDERS:
+            raise RuntimeError(f"Unknown LLM_PROVIDER '{explicit}'. Choose one of: {', '.join(PROVIDERS)}")
+        return explicit
 
+    if _codex_available():
+        return "codex"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if os.environ.get("GEMINI_API_KEY"):
+        return "gemini"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai"
+    if os.environ.get("LLM_URL"):
+        return "local"
     raise RuntimeError(
-        "No LLM provider configured. "
-        "Set GEMINI_API_KEY, OPENAI_API_KEY, or LLM_URL in your environment."
+        "No LLM provider configured. Run `applypilot login` to sign in with ChatGPT, "
+        "or set ANTHROPIC_API_KEY (or GEMINI_API_KEY / OPENAI_API_KEY / LLM_URL) in ~/.applypilot/.env."
     )
 
 
-# ---------------------------------------------------------------------------
-# Client
-# ---------------------------------------------------------------------------
+def build_provider(name: str, model: str | None = None) -> LLMProvider:
+    model = model or os.environ.get("LLM_MODEL") or None
 
-_MAX_RETRIES = 5
-_TIMEOUT = 120  # seconds
+    if name == "codex":
+        from applypilot.providers.codex import CodexProvider
 
-# Base wait on first 429/503 (doubles each retry, caps at 60s).
-# Gemini free tier is 15 RPM = 4s minimum between requests; 10s gives headroom.
-_RATE_LIMIT_BASE_WAIT = 10
+        return CodexProvider(model=model)
+
+    if name == "anthropic":
+        from applypilot.providers.anthropic_provider import AnthropicProvider
+
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set.")
+        return AnthropicProvider(api_key=key, model=model)
+
+    from applypilot.providers.compat import LLMClient
+
+    if name == "gemini":
+        return LLMClient(
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            model or "gemini-2.0-flash",
+            os.environ.get("GEMINI_API_KEY", ""),
+            name="gemini",
+        )
+    if name == "openai":
+        return LLMClient("https://api.openai.com/v1", model or "gpt-4o-mini", os.environ.get("OPENAI_API_KEY", ""), name="openai")
+    if name == "local":
+        url = os.environ.get("LLM_URL", "")
+        if not url:
+            raise RuntimeError("LLM_PROVIDER=local but LLM_URL is not set.")
+        return LLMClient(url.rstrip("/"), model or "local-model", os.environ.get("LLM_API_KEY", ""), name="local")
+
+    raise RuntimeError(f"Unknown provider '{name}'")
 
 
-_GEMINI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
-_GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta"
+class FallbackProvider:
+    """Use ``primary`` until it hits a usage limit, then ``backup`` for the rest of the run.
 
-
-class LLMClient:
-    """Thin LLM client supporting OpenAI-compatible and native Gemini endpoints.
-
-    For Gemini keys, starts on the OpenAI-compat layer. On a 403 (which
-    happens with preview/experimental models not exposed via compat), it
-    automatically switches to the native generateContent API and stays there
-    for the lifetime of the process.
+    Wraps ChatGPT sign-in with a Claude API key when both are configured
+    (disable with LLM_FALLBACK=0).
     """
 
-    def __init__(self, base_url: str, model: str, api_key: str) -> None:
-        self.base_url = base_url
-        self.model = model
-        self.api_key = api_key
-        self._client = httpx.Client(timeout=_TIMEOUT)
-        # True once we've confirmed the native Gemini API works for this model
-        self._use_native_gemini: bool = False
-        self._is_gemini: bool = base_url.startswith(_GEMINI_COMPAT_BASE)
+    def __init__(self, primary: LLMProvider, backup_factory) -> None:
+        self._primary = primary
+        self._backup_factory = backup_factory
+        self._active = primary
+        self._lock = threading.Lock()
 
-    # -- Native Gemini API --------------------------------------------------
+    @property
+    def name(self) -> str:
+        return self._active.name
 
-    def _chat_native_gemini(
-        self,
-        messages: list[dict],
-        temperature: float,
-        max_tokens: int,
-    ) -> str:
-        """Call the native Gemini generateContent API.
+    @property
+    def model(self) -> str:
+        return self._active.model
 
-        Used automatically when the OpenAI-compat endpoint returns 403,
-        which happens for preview/experimental models not exposed via compat.
+    def _switch(self, exc: Exception) -> None:
+        with self._lock:
+            if self._active is self._primary:
+                log.warning("%s; switching to the Claude API key for the rest of this run.", exc)
+                self._active = self._backup_factory()
 
-        Converts OpenAI-style messages to Gemini's contents/systemInstruction
-        format transparently.
-        """
-        contents: list[dict] = []
-        system_parts: list[dict] = []
+    def _call(self, method: str, *args, **kwargs):
+        from applypilot.providers.codex import CodexUsageLimit
 
-        for msg in messages:
-            role = msg["role"]
-            text = msg.get("content", "")
-            if role == "system":
-                system_parts.append({"text": text})
-            elif role == "user":
-                contents.append({"role": "user", "parts": [{"text": text}]})
-            elif role == "assistant":
-                # Gemini uses "model" instead of "assistant"
-                contents.append({"role": "model", "parts": [{"text": text}]})
+        try:
+            return getattr(self._active, method)(*args, **kwargs)
+        except CodexUsageLimit as exc:
+            self._switch(exc)
+            return getattr(self._active, method)(*args, **kwargs)
 
-        payload: dict = {
-            "contents": contents,
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": max_tokens,
-            },
-        }
-        if system_parts:
-            payload["systemInstruction"] = {"parts": system_parts}
+    def chat(self, *args, **kwargs):
+        return self._call("chat", *args, **kwargs)
 
-        url = f"{_GEMINI_NATIVE_BASE}/models/{self.model}:generateContent"
-        resp = self._client.post(
-            url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            params={"key": self.api_key},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+    def ask(self, *args, **kwargs):
+        return self._call("ask", *args, **kwargs)
 
-    # -- OpenAI-compat API --------------------------------------------------
+    def run_agent(self, *args, **kwargs):
+        return self._call("run_agent", *args, **kwargs)
 
-    def _chat_compat(
-        self,
-        messages: list[dict],
-        temperature: float,
-        max_tokens: int,
-    ) -> str:
-        """Call the OpenAI-compatible endpoint."""
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
-        resp = self._client.post(
-            f"{self.base_url}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-
-        # 403 on Gemini compat = model not available on compat layer.
-        # Raise a specific sentinel so chat() can switch to native API.
-        if resp.status_code == 403 and self._is_gemini:
-            raise _GeminiCompatForbidden(resp)
-
-        return self._handle_compat_response(resp)
-
-    @staticmethod
-    def _handle_compat_response(resp: httpx.Response) -> str:
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-    # -- public API ---------------------------------------------------------
-
-    def chat(
-        self,
-        messages: list[dict],
-        temperature: float = 0.0,
-        max_tokens: int = 4096,
-    ) -> str:
-        """Send a chat completion request and return the assistant message text."""
-        # Qwen3 optimization: prepend /no_think to skip chain-of-thought
-        # reasoning, saving tokens on structured extraction tasks.
-        if "qwen" in self.model.lower() and messages:
-            first = messages[0]
-            if first.get("role") == "user" and not first["content"].startswith("/no_think"):
-                messages = [{"role": first["role"], "content": f"/no_think\n{first['content']}"}] + messages[1:]
-
-        for attempt in range(_MAX_RETRIES):
-            try:
-                # Route to native Gemini if we've already confirmed it's needed
-                if self._use_native_gemini:
-                    return self._chat_native_gemini(messages, temperature, max_tokens)
-
-                return self._chat_compat(messages, temperature, max_tokens)
-
-            except _GeminiCompatForbidden as exc:
-                # Model not available on OpenAI-compat layer — switch to native.
-                log.warning(
-                    "Gemini compat endpoint returned 403 for model '%s'. "
-                    "Switching to native generateContent API. "
-                    "(Preview/experimental models are often compat-only on native.)",
-                    self.model,
-                )
-                self._use_native_gemini = True
-                # Retry immediately with native — don't count as a rate-limit wait
-                try:
-                    return self._chat_native_gemini(messages, temperature, max_tokens)
-                except httpx.HTTPStatusError as native_exc:
-                    raise RuntimeError(
-                        f"Both Gemini endpoints failed. Compat: 403 Forbidden. "
-                        f"Native: {native_exc.response.status_code} — "
-                        f"{native_exc.response.text[:200]}"
-                    ) from native_exc
-
-            except httpx.HTTPStatusError as exc:
-                resp = exc.response
-                if resp.status_code in (429, 503) and attempt < _MAX_RETRIES - 1:
-                    # Respect Retry-After header if provided (Gemini sends this).
-                    retry_after = (
-                        resp.headers.get("Retry-After")
-                        or resp.headers.get("X-RateLimit-Reset-Requests")
-                    )
-                    if retry_after:
-                        try:
-                            wait = float(retry_after)
-                        except (ValueError, TypeError):
-                            wait = _RATE_LIMIT_BASE_WAIT * (2 ** attempt)
-                    else:
-                        wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 60)
-
-                    log.warning(
-                        "LLM rate limited (HTTP %s). Waiting %ds before retry %d/%d. "
-                        "Tip: Gemini free tier = 15 RPM. Consider a paid account "
-                        "or switching to a local model.",
-                        resp.status_code, wait, attempt + 1, _MAX_RETRIES,
-                    )
-                    time.sleep(wait)
-                    continue
-                raise
-
-            except httpx.TimeoutException:
-                if attempt < _MAX_RETRIES - 1:
-                    wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 60)
-                    log.warning(
-                        "LLM request timed out, retrying in %ds (attempt %d/%d)",
-                        wait, attempt + 1, _MAX_RETRIES,
-                    )
-                    time.sleep(wait)
-                    continue
-                raise
-
-        raise RuntimeError("LLM request failed after all retries")
-
-    def ask(self, prompt: str, **kwargs) -> str:
-        """Convenience: single user prompt -> assistant response."""
-        return self.chat([{"role": "user", "content": prompt}], **kwargs)
+    def list_models(self):
+        return self._primary.list_models()
 
     def close(self) -> None:
-        self._client.close()
+        self._primary.close()
+        if self._active is not self._primary:
+            self._active.close()
 
 
-class _GeminiCompatForbidden(Exception):
-    """Sentinel: Gemini OpenAI-compat returned 403. Switch to native API."""
-    def __init__(self, response: httpx.Response) -> None:
-        self.response = response
-        super().__init__(f"Gemini compat 403: {response.text[:200]}")
+_instances: dict[str, LLMProvider] = {}
+_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------------------
-# Singleton
-# ---------------------------------------------------------------------------
+def get_client(role: str = "text") -> LLMProvider:
+    """Return (or create) the provider singleton for a role.
 
-_instance: LLMClient | None = None
+    role="text"  : scoring, tailoring, cover letters, stories, extraction.
+    role="apply" : the browser agent (honours APPLY_LLM_PROVIDER / APPLY_LLM_MODEL).
+    """
+    with _lock:
+        if role not in _instances:
+            name = detect_provider_name(role)
+            model = os.environ.get("APPLY_LLM_MODEL") if role == "apply" else None
+            provider = build_provider(name, model)
+            if name == "codex" and os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("LLM_FALLBACK", "1") != "0":
+                provider = FallbackProvider(provider, lambda: build_provider("anthropic", os.environ.get("ANTHROPIC_MODEL")))
+            log.info("LLM provider (%s): %s  model: %s", role, provider.name, provider.model)
+            _instances[role] = provider
+        return _instances[role]
 
 
-def get_client() -> LLMClient:
-    """Return (or create) the module-level LLMClient singleton."""
-    global _instance
-    if _instance is None:
-        base_url, model, api_key = _detect_provider()
-        log.info("LLM provider: %s  model: %s", base_url, model)
-        _instance = LLMClient(base_url, model, api_key)
-    return _instance
+def reset_clients() -> None:
+    """Drop cached providers (used after login/logout and in tests)."""
+    with _lock:
+        for p in _instances.values():
+            try:
+                p.close()
+            except Exception:
+                pass
+        _instances.clear()

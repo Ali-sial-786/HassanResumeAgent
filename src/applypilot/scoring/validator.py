@@ -293,7 +293,25 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
 
 # ── Cover Letter Validation ──────────────────────────────────────────────
 
-def validate_cover_letter(text: str, mode: str = "normal") -> dict:
+def unsupported_numbers(text: str, allowed: set[str]) -> list[str]:
+    """Numbers in text that are not in the allowed set (years and small counts are ignored)."""
+    from applypilot.scoring.stories import numbers_in
+
+    bad = []
+    for tok in sorted(numbers_in(text, with_bare=False)):
+        bare = re.sub(r"[%xkmb+]$", "", tok)
+        try:
+            value = float(bare)
+        except ValueError:
+            continue
+        if tok == bare and (value < 10 or 1990 <= value <= 2039):
+            continue  # "3 years", "2024": too common to police
+        if tok not in allowed and bare not in allowed:
+            bad.append(tok)
+    return bad
+
+
+def validate_cover_letter(text: str, mode: str = "normal", allowed_numbers: set[str] | None = None) -> dict:
     """Programmatic validation of a cover letter.
 
     Args:
@@ -337,7 +355,13 @@ def validate_cover_letter(text: str, mode: str = "normal") -> dict:
     if found_leaks:
         errors.append(f"LLM self-talk: '{found_leaks[0]}'")
 
-    # 5. Must start with "Dear" — always checked (preamble should have been stripped)
+    # 5. Invented numbers -- any metric not in the resume, story bank or job posting
+    if allowed_numbers is not None:
+        bad = unsupported_numbers(text, allowed_numbers)
+        if bad:
+            errors.append(f"Numbers not in the resume/stories/job posting (do not invent metrics): {', '.join(bad[:5])}")
+
+    # 6. Must start with "Dear" — always checked (preamble should have been stripped)
     stripped = text.strip()
     if not stripped.lower().startswith("dear"):
         errors.append("Must start with 'Dear Hiring Manager,'")

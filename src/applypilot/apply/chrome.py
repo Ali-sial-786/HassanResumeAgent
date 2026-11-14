@@ -6,6 +6,7 @@ worker profile setup/cloning, and cross-platform process cleanup.
 
 import json
 import logging
+import os
 import platform
 import shutil
 import subprocess
@@ -101,8 +102,11 @@ def setup_worker_profile(worker_id: int) -> Path:
     """Create an isolated Chrome profile for a worker.
 
     On first run, clones from an existing worker profile (preferred, since
-    it already has session cookies) or from the user's real Chrome profile.
-    Subsequent runs reuse the existing worker profile.
+    it already has session cookies). Cloning your *real* Chrome profile is
+    opt-in (APPLY_CLONE_CHROME_PROFILE=1): it hands the LLM-driven browser every
+    logged-in session you have (email, banking...), which a malicious job page
+    could try to exploit. By default a fresh profile is used; sign in to job
+    sites in it once and the session persists. Subsequent runs reuse it.
 
     Args:
         worker_id: Numeric worker identifier.
@@ -123,8 +127,12 @@ def setup_worker_profile(worker_id: int) -> Path:
         if (candidate / "Default").exists():
             source = candidate
             break
-    if source is None:
+    if source is None and os.environ.get("APPLY_CLONE_CHROME_PROFILE", "0") == "1":
         source = config.get_chrome_user_data()
+    if source is None or not source.exists():
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("[worker-%d] Using a fresh Chrome profile at %s", worker_id, profile_dir)
+        return profile_dir
 
     logger.info("[worker-%d] Copying Chrome profile from %s (first time setup)...",
                 worker_id, source.name)

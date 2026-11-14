@@ -113,6 +113,21 @@ def load_search_config() -> dict:
     return yaml.safe_load(SEARCH_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def location_filter_lists(search_cfg: dict | None) -> tuple[list[str], list[str]]:
+    """Return (accept, reject) location patterns from a search config.
+
+    Reads the documented ``location.accept_patterns`` / ``location.reject_patterns``
+    keys and also the legacy flat ``location_accept`` / ``location_reject_non_remote``
+    keys. Upstream read only the legacy keys, so every non-remote job was dropped
+    (ApplyPilot issue #109).
+    """
+    cfg = search_cfg or {}
+    loc = cfg.get("location") if isinstance(cfg.get("location"), dict) else {}
+    accept = list(loc.get("accept_patterns") or []) + list(cfg.get("location_accept") or [])
+    reject = list(loc.get("reject_patterns") or []) + list(cfg.get("location_reject_non_remote") or [])
+    return accept, reject
+
+
 def load_sites_config() -> dict:
     """Load sites.yaml configuration (sites list, manual_ats, blocked, etc.)."""
     import yaml
@@ -197,27 +212,36 @@ TIER_COMMANDS: dict[int, list[str]] = {
 }
 
 
+def has_llm_provider() -> bool:
+    """True if any LLM provider is configured (ChatGPT login, Claude key, ...)."""
+    from applypilot.llm import detect_provider_name
+    try:
+        detect_provider_name()
+        return True
+    except RuntimeError:
+        return False
+
+
 def get_tier() -> int:
     """Detect the current tier based on available dependencies.
 
-    Tier 1 (Discovery):            Python + pip
-    Tier 2 (AI Scoring & Tailoring): + LLM API key
-    Tier 3 (Full Auto-Apply):       + Claude Code CLI + Chrome
+    Tier 1 (Discovery):              Python + pip
+    Tier 2 (AI Scoring & Tailoring): + an LLM provider (ChatGPT login or API key)
+    Tier 3 (Full Auto-Apply):        + Chrome + Node.js (npx, for Playwright MCP)
     """
     load_env()
 
-    has_llm = any(os.environ.get(k) for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL"))
-    if not has_llm:
+    if not has_llm_provider():
         return 1
 
-    has_claude = shutil.which("claude") is not None
+    has_npx = shutil.which("npx") is not None
     try:
         get_chrome_path()
         has_chrome = True
     except FileNotFoundError:
         has_chrome = False
 
-    if has_claude and has_chrome:
+    if has_npx and has_chrome:
         return 3
 
     return 2
@@ -238,11 +262,11 @@ def check_tier(required: int, feature: str) -> None:
     _console = Console(stderr=True)
 
     missing: list[str] = []
-    if required >= 2 and not any(os.environ.get(k) for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL")):
-        missing.append("LLM API key — run [bold]applypilot init[/bold] or set GEMINI_API_KEY")
+    if required >= 2 and not has_llm_provider():
+        missing.append("LLM — run [bold]applypilot login[/bold] (ChatGPT) or set ANTHROPIC_API_KEY in ~/.applypilot/.env")
     if required >= 3:
-        if not shutil.which("claude"):
-            missing.append("Claude Code CLI — install from [bold]https://claude.ai/code[/bold]")
+        if not shutil.which("npx"):
+            missing.append("Node.js (npx) — install from [bold]https://nodejs.org[/bold] (runs the Playwright MCP browser server)")
         try:
             get_chrome_path()
         except FileNotFoundError:
